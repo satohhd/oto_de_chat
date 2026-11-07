@@ -48,12 +48,24 @@ def goertzel_magnitude(block: np.ndarray, freq: float) -> float:
     return abs(np.sum(block * basis))
 
 
+# 単一周波数への相関は、目標周波数から 1/シンボル長 [Hz] ずれると0になる(sinc関数の
+# 最初のゼロ点)。250msなら約4Hzで、雑音下ではドリフト比の推定誤差(0.5%程度)だけで
+# シ(約988Hz)がちょうどこのゼロ点付近まで外れ、別の音と誤判定されることがあった。
+# 各音について目標周波数の前後(ビン幅の±SPREAD_BINS倍)も評価して最大値を採ることで、
+# ドリフト比の推定誤差に対して判定を鈍感にする。隣接音の間隔(最小でも約39Hz)に
+# 比べて十分小さいので、隣の音と取り違えることはない。
+SPREAD_BINS = (-0.5, 0.0, 0.5)
+
+
 def tone_magnitudes(block: np.ndarray, freqs: list[float], ratio: float = 1.0) -> np.ndarray:
-    """freqsの各候補周波数(ratio補正込み)について、blockとの相関の大きさをまとめて返す。"""
+    """freqsの各候補周波数(ratio補正込み)について、blockとの相関の大きさをまとめて返す。
+    各音は目標周波数の前後SPREAD_BINSも評価し、その最大値をその音の大きさとする。"""
     n = np.arange(len(block))
-    targets = np.asarray(freqs) * ratio
-    basis = np.exp(-2j * np.pi * np.outer(targets, n) / SAMPLE_RATE)  # shape (K, N)
-    return np.abs(basis @ block)
+    bin_hz = SAMPLE_RATE / len(block)
+    offsets = np.asarray(SPREAD_BINS) * bin_hz
+    targets = (np.asarray(freqs) * ratio)[:, None] + offsets  # shape (K, S)
+    basis = np.exp(-2j * np.pi * np.outer(targets.ravel(), n) / SAMPLE_RATE)  # shape (K*S, N)
+    return np.abs(basis @ block).reshape(targets.shape).max(axis=1)
 
 
 def decode_block(block: np.ndarray, freqs: list[float], ratio: float = 1.0) -> int:
